@@ -73,9 +73,6 @@ The application follows these steps to provide responses to your questions:
 ![Project Architecture](https://github.com/Sakalya100/Chatbot-using-Langchain/assets/70064084/ef84a6ae-63c1-41d7-8cf0-78c2c7e9447f)
 
 
-## Video Demo
-https://github.com/Sakalya100/Chatbot-using-Langchain/assets/70064084/26fc8e1d-33e1-4ed1-9e55-ea01e08d3726
-
 
 ## Acknowledgements
 We would like to express our gratitude to the developers and maintainers of OpenAI and Langchain for providing the tools and technologies that made this project possible.
