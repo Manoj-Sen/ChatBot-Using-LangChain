@@ -1,111 +1,90 @@
 import streamlit as st
-# This is to load the environment tokens in my main file without using them publicly
-from dotenv import load_dotenv
-
 from PyPDF2 import PdfReader
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings, HuggingFaceInstructEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain.vectorstores import FAISS
-from langchain.chat_models import ChatOpenAI
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import ConversationalRetrievalChain
+from langchain.chains.question_answering import load_qa_chain
+from langchain.prompts import PromptTemplate
+from dotenv import load_dotenv
 from htmlTemplates import css, bot_template, user_template
-from langchain.llms import HuggingFaceHub 
 
-# Function to loop through all pdfs uploaded and extract the raw text in the pdfs
+load_dotenv()
+
+# Function to extract text from uploaded PDFs
 def get_pdf_text(pdf_docs):
     text = ""
     for pdf in pdf_docs:
         pdf_reader = PdfReader(pdf)
         for page in pdf_reader.pages:
             text += page.extract_text()
-    
     return text
 
-
-# To convert the entire text into chunks of text
+# Function to split text into chunks
 def get_text_chunks(text):
-    text_splitter = CharacterTextSplitter(
-        separator = "\n",
-        chunk_size = 1000,
-        chunk_overlap = 200,
-        length_function = len
-    )
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
     chunks = text_splitter.split_text(text)
     return chunks
 
-# The vector store to store the data and embeddings
-def get_vectorstore(text_chunks):
-    embeddings = OpenAIEmbeddings()
-    # embeddings = HuggingFaceInstructEmbeddings(model_name = "hkunlp/instructor-xl")
-    vectorstore = FAISS.from_texts(texts = text_chunks, embedding = embeddings)
-    return vectorstore
+# Function to create and save vector store
+def get_vector_store(text_chunks):
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+    vector_store.save_local("faiss_index")
 
+# Function to initialize conversational AI chain
+def get_conversational_chain(vector_store):
+    prompt_template = """
+    Answer the question as detailed as possible from the provided context, make sure to provide all the details, if the answer is not in
+    provided context just say, "answer is not available in the context", don't provide the wrong answer\n\n
+    Context:\n {context}?\n
+    Question: \n{question}\n
 
-def get_conversation_chain(vectorstore):
-    llm = ChatOpenAI()
-    # llm = HuggingFaceHub(repo_id="google/flan-t5-xxl", model_kwargs={"temperature":0.5, "max_length":512})
-    memory = ConversationBufferMemory(memory_key='chat_history', return_messages = True)
-    conversation_chain = ConversationalRetrievalChain.from_llm(
-        llm = llm,
-        retriever = vectorstore.as_retriever(),
-        memory = memory,
-    )
-    return conversation_chain
+    Answer:
+    """
+    model = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3)
+    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
+    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
+    return chain
 
+# Function to handle user input and generate response
+def handle_user_input(user_question, vector_store, conversation_chain):
+    docs = vector_store.similarity_search(user_question)
+    response = conversation_chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
+    return response["output_text"]
 
-def handle_userinput(user_question):
-    response = st.session_state.conversation({'question': user_question})
-    st.session_state.chat_history = response['chat_history']
-
-
-    for i, message in enumerate(st.session_state.chat_history):
-        if i%2 == 0:
-             st.write(user_template.replace("{{MSG}}", message.content), unsafe_allow_html= True)
-        else:
-            st.write(bot_template.replace("{{MSG}}", message.content), unsafe_allow_html= True)
-
-
+# Main Streamlit application
 def main():
-    load_dotenv()
-    st.set_page_config(page_title='Physics Chatbot', page_icon=':books:', layout='wide')
-    
-    st.write(css, unsafe_allow_html=True)
-    if "conversation" not in st.session_state:
-        st.session_state.conversation = None
+    st.set_page_config(page_title="Chat with multiple PDFs", page_icon=":books:")
+    st.markdown(css, unsafe_allow_html=True)
 
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = None
-    
+    # Initialize session state variables
+    if "vector_store" not in st.session_state:
+        st.session_state.vector_store = None
+    if "conversation_chain" not in st.session_state:
+        st.session_state.conversation_chain = None
 
-    st.header(" Your Physics Buddy :books:")
-    user_question = st.text_input("Ask a Question about Physics")
+    st.header("Chat with multiple PDFs :books:")
+    user_question = st.text_input("Ask a question about your documents:")
+
+    # Handle user input
     if user_question:
-        handle_userinput(user_question)
-    # st.write(user_template.replace("{{MSG}}", "Hello Robot"), unsafe_allow_html= True)
-    # st.write(bot_template.replace("{{MSG}}", "Hello Human"), unsafe_allow_html= True)
-    
-    # For uploading pdf document
+        if st.session_state.vector_store is not None and st.session_state.conversation_chain is not None:
+            response_text = handle_user_input(user_question, st.session_state.vector_store, st.session_state.conversation_chain)
+            st.markdown(user_template.replace("{{MSG}}", user_question), unsafe_allow_html=True)
+            st.markdown(bot_template.replace("{{MSG}}", response_text), unsafe_allow_html=True)
+
+    # Sidebar for uploading PDFs and processing
     with st.sidebar:
-        st.subheader("Your Document")
-        pdf_docs = st.file_uploader("Upload your pdfs here and click on 'Process'", type=['pdf'], accept_multiple_files= True)
-        if(st.button("Process")):
-            with st.spinner("Processing your pdfs"): # GIves a loadig animation
-                # get the pdf text
+        st.subheader("Your documents")
+        pdf_docs = st.file_uploader("Upload your PDFs here and click on 'Process'", accept_multiple_files=True)
+        if st.button("Process"):
+            with st.spinner("Processing"):
                 raw_text = get_pdf_text(pdf_docs)
-                
-                # get the text chunks
                 text_chunks = get_text_chunks(raw_text)
-                # st.write(text_chunks)
+                get_vector_store(text_chunks)
+                st.session_state.vector_store = FAISS.load_local("faiss_index", embeddings=GoogleGenerativeAIEmbeddings(model="models/embedding-001"), allow_dangerous_deserialization=True)
+                st.session_state.conversation_chain = get_conversational_chain(st.session_state.vector_store)
+                st.success("Done")
 
-                # to create our vector store with embeddings
-                vectorstore = get_vectorstore(text_chunks)
-
-                # create conversation chain
-                st.session_state.conversation  = get_conversation_chain(vectorstore)
-
-
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
