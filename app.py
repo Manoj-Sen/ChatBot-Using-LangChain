@@ -63,7 +63,7 @@ def main():
     if "conversation_chain" not in st.session_state:
         st.session_state.conversation_chain = None
 
-    st.header("Chat with multiple PDFs :books:")
+    st.header("Your Physics Buddy :books:")
     user_question = st.text_input("Ask a question about your documents:")
 
     # Handle user input
